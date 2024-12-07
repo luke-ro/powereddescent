@@ -1,6 +1,9 @@
 using OrdinaryDiffEq
 using LinearAlgebra 
 using Plots
+using Convex
+using ECOS
+
 
 """
 calcAB(dt,alpha)
@@ -55,53 +58,71 @@ function makeLambda(A,B,k;m=7,n=4)
     return LAMBDA;
 end
 
-function makeUpsilon(k;m=7,n=4)
-    UPSILON = zeros(Float64,m,m*k);
-    UPSILON[:,(k-1)*m+1:k*m] = Matrix(0.0I, m, m); #TODO what is this when k==0?
+function makeUpsilon(N,k;p=4)
+    UPSILON = zeros(Float64,p,p*(N+1));
+    UPSILON[:,(k)*p+1:(k+1)*p] = Matrix(1.0I, p, p); #TODO what is this when k==0?
     # UPSILON[:,(k-1)*m+1:k*m] = I;
+    return UPSILON
 end
 
-function makeConstraintEq50(constraints,N,eta,E_u,e_sig;m=7,n-4)
+function makeConstraintEq50!(constraints,N,eta,E_u,e_sig;m=7,n=4)
     # UPSILON = makeUpsilon(0)
     # constraints = Constraint[sumsquares(E_u*UPSILON*eta)<=transpose(e_sig)*UPSILON*eta]
     for k in 0:N
-        UPSILON = makeUpsilon(k)
+        UPSILON = makeUpsilon(N,k)
         push!(constraints,sumsquares(E_u*UPSILON*eta)<=transpose(e_sig)*UPSILON*eta)
     end
     return
 end
 
-function solveProblem(Dt,N,alpha)
+function solveProblem(N,Dt,alpha)
     A,B = calcAB(Dt,alpha);
     m = size(B,2);
     n = size(B,1);
 
+    # N = Variable();
     eta = Variable(m*(N+1),1);
-    N = Variable(Int);
 
-    e_sig = [0.0;0;0;1];
-    E = [Matrix(1.0I,6,6) Matrix(0.0,6,1)];
-    F = [Matrix(0.0,1,6) 1];
+    e_sig = [0.0; 0; 0; 1];
+    E = [Matrix(1.0I,6,6) zeros(Float64,6,1)];
+    F = [zeros(Float64,1,6) 1];
     w = Dt;
-    omega = N -> map(w -> w .*transpose(e_sig), Vector(w,N)) #probably need to turn this into a 1d Vector
+    omega = w*repeat(e_sig,outer=N+1)#probably need to turn this into a 1d Vector
     E_u = [Matrix(1.0I,3,3) zeros(Float64,3,1)]
 
+    constraints = []
 
-    for k = 0:N
-        UPSILON = makeUpsilon(k);
-        E_u*UPSILON<=transpose(e_sig)*UPSILON*
+    makeConstraintEq50!(constraints,N,eta,E_u,e_sig)
 
-    for i in 0:N
-        UPSILON = makeUpsilon(k);
-        PHI = makePHI(A,k);
-        PSI = makePSI(A,B,k);
-        LAMBDA = makeLambda(A,B,k);
-    end
+    # for k = 0:N
+    #     UPSILON = makeUpsilon(k);
+    #     E_u*UPSILON<=transpose(e_sig)*UPSILON*
+    # end
 
+
+
+    # for i in 0:N
+    #     UPSILON = makeUpsilon(k);
+    #     PHI = makePHI(A,k);
+    #     PSI = makePSI(A,B,k);
+    #     LAMBDA = makeLambda(A,B,k);
+    # end
+
+    cost = transpose(omega)*eta;
+    problem = minimize(cost,constraints)
+    solver = ECOS.Optimizer
+
+    Convex.solve!(problem, solver, silent=true)
+
+    eta_opt = evaluate(eta)
+    N_opt = evaluate(N)
+
+    return eta_opt,N_opt
 end
 
 
 Dt = 0.5;
+N = 10
 alpha = 0.25;
 g = [-3.7114; 0; 0];
 m_dry = 1505; #kg
@@ -113,5 +134,7 @@ T_2 = 0.8*T_bar;
 n = 6;
 phi = 27*3.1415/180;
 
+
+solveProblem(N,Dt,alpha)
 
 
