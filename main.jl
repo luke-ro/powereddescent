@@ -69,14 +69,14 @@ function makePSI(A,B,k,N;m=7,n=4)
     #         PSI[(i-1)*m+1:i*m, (j-1)*n+1:j*n] = A^(i-2-(j-1))*B; 
     #     end
     # end
-    println("In makePsi:")
-    print("N: "); println(N);
-    print("n: "); println(n);
+    # println("In makePsi:")
+    # print("N: "); println(N);
+    # print("n: "); println(n);
     PSI = zeros(Float64,m,n*(N+1)) # number of columns must match number of rows of eta
     for i in 1:k
         PSI[:,(i-1)*n+1:i*n] = A^(k-1-(i-1))*B; 
     end
-    print("size(psi): "); println(size(PSI))
+    # print("size(psi): "); println(size(PSI))
     return PSI;
 end
 
@@ -157,13 +157,13 @@ function addConstraints!(constraints,A,B,N,Dt,eta,omega,params::ProblemParameter
         LAMBDA_k = makeLambda(A,B,k)
         XI_k = PHI_k*params.y0 + LAMBDA_k*vcat(params.g, [0])
 
-        println("here:")
+        # println("here:")
         # print("size(XI_k+PHI_k*eta): "); println(size(XI_k+PHI_k*eta))
-        println(N)
-        print(size(XI_k+(PSI_k*eta)))
+        # println(N)
+        # print(size(XI_k+(PSI_k*eta)))
         
         # eq51 part 1
-        temp = mu1_k*(1-((F*(XI_k+PSI_k*eta)-z0_k))+((F*(XI_k+PSI_k*eta)-z0_k)*(F*(XI_k+PSI_k*eta)-z0_k))/2) <= transpose(e_sig)*UPSILON_k*eta
+        temp = mu1_k*(1-(F*(XI_k+PSI_k*eta)-z0_k)+((F*(XI_k+PSI_k*eta)-z0_k)*(F*(XI_k+PSI_k*eta)-z0_k))/2) <= transpose(e_sig)*UPSILON_k*eta
         push!(constraints,temp)
         # eq51 part 2
         temp = transpose(e_sig)*UPSILON_k*eta <= mu2_k*(1-(F*(XI_k+PSI_k*eta)-z0_k))
@@ -185,8 +185,8 @@ function addConstraints!(constraints,A,B,N,Dt,eta,omega,params::ProblemParameter
             push!(constraints,temp)
         end
 
-        return 
     end
+    return 
 end
 
 function solveProblem(N,Dt,params)
@@ -261,10 +261,9 @@ end
 
 
 Dt = 0.5;
-N = 10
+N = 160
 
 g = [-3.7114; 0; 0];
-alpha = 0.25;
 m_dry = 1505; #kg
 m_wet = 1905; #kg
 I_sp = 225; #s
@@ -274,26 +273,33 @@ T_2 = 0.8*T_bar;
 n = 6;
 phi = 27*3.1415/180;
 r0 = [1.5,0,2]*1000 #km -> m
-dr0 = [-75,0,100] #m/s
+dr0 = [-75,0,0] #m/s
 y0 = vcat(r0,dr0,log(m_wet))
-S = []
-v = []
-c = []
-a = []
+alpha = 1/(I_sp*9.807*cos(phi));
+theta_tilde = 87.0*3.1415/180;
+S = [[0 1 0 0 0 0;
+     0 0 1 0 0 0], 
+     [0 0 0 0 0 0]]
+v = [[0;0], [0]]
+c = [[-tan(theta_tilde); 0; 0; 0; 0; 0], [-1; 0; 0; 0; 0; 0]]
+a = [[0],[0]]
 params = ProblemParameters(g,alpha,m_dry,m_wet,I_sp,T_bar,T_1,T_2,n,phi,y0,S,v,c,a)
-print(params)
+# print(params)
 
 
 
 
 eta_opt, A, B = solveProblem(N,Dt,params)
 # [t,x] = simulateProblem(A,B,)
+# print(reshape(eta_opt,4,:))
 
-eta = reshape(eta_opt,:,4)
+eta = transpose(reshape(eta_opt,4,:))
 x,u = calcTrajectory(Dt,N,A,B,eta_opt,params::ProblemParameters)
 
-print(x)
+# print(x)
 
-p = plot(transpose(x))
+p = plot(transpose(x[2:3,:]))
 display(p)
-# plot(eta[:,1:3])
+
+p = plot(eta)
+display(p)
