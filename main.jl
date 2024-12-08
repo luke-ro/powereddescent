@@ -3,6 +3,7 @@ using LinearAlgebra
 using Plots
 using Convex
 using ECOS
+using Clarabel
 
 
 const e_sig = [0.0; 0; 0; 1];
@@ -42,18 +43,25 @@ function calcAB(Dt,alpha)
     Bc[4:6,1:3] = Matrix(1.0I, 3, 3);
     Bc[7,4] = -alpha;
 
-    function intB!(dB, B, p, t)
-        temp = exp(Ac*(Dt-t))*Bc;
-        dB[:] = reshape(temp,:,1);
-        # println(dB)
+    # function intB!(dB, B, p, t)
+    #     temp = exp(Ac*(Dt-t))*Bc;
+    #     dB[:] = reshape(temp,:,1);
+    #     # println(dB)
  
-    end
+    # end
 
-    A = exp(Ac*Dt);
-    prob = ODEProblem(intB!,zeros(Float64,28,1),(0,Dt));
-    B = solve(prob, Tsit5()); 
-    # print(size(B))
-    B = reshape(B[:,1,end],7,4);
+    # A = exp(Ac*Dt);
+    # prob = ODEProblem(intB!,zeros(Float64,28,1),(0,Dt));
+    # B = solve(prob, Tsit5()); 
+    # # print(size(B))
+    # B = reshape(B[:,1,end],7,4);
+
+    A_hat = [Ac Bc; 
+            zeros(4,11)]
+    
+    temp = exp(A_hat)
+    A = temp[1:7,1:7]
+    B = temp[1:7,8:11]
 
     return A,B;
 end
@@ -143,7 +151,7 @@ function addConstraints!(constraints,A,B,N,Dt,eta,omega,params::ProblemParameter
     #constraint in eq50
     for k in 0:N
         UPSILON = makeUpsilon(N,k)
-        push!(constraints,sumsquares(E_u*UPSILON*eta)<=transpose(e_sig)*UPSILON*eta)
+        push!(constraints,norm(E_u*UPSILON*eta)<=transpose(e_sig)*UPSILON*eta)
     end
 
     for k in 1:N
@@ -180,16 +188,68 @@ function addConstraints!(constraints,A,B,N,Dt,eta,omega,params::ProblemParameter
         push!(constraints,temp)
 
         #||S*x-v||+c^T*x + a <= 0 constraints
+        # for j = 1:n_s
+        #     temp = norm(params.S[j]*E*(XI_k+PSI_k*eta)-params.v[j]) + transpose(params.c[j])*E*(XI_k+PSI_k*eta) + params.a[j] <= 0
+        #     push!(constraints,temp)
+        # end
+
+        # TODO I feel like I shouldn't need this
+        # if k == N
+        #     temp = [Matrix(1.0I,3,3) zeros(3,4)]*(XI_k+PSI_k*eta) == zeros(3,1)
+        #     push!(constraints,temp)
+        # end
+    end
+
+    return 
+end
+
+function testConstraints!(A,B,N,Dt,eta,omega,params::ProblemParameters;m=7,n=4)
+    n_s = size(a,1) #number of constraints for ||S*x-v||+c^T*x + a <= 0
+
+    #constraint in eq50
+    for k in 0:N
+        UPSILON = makeUpsilon(N,k)
+        temp = norm(E_u*UPSILON*eta) <= transpose(e_sig)*UPSILON*eta
+    end
+
+    for k in 1:N
+        t = k*Dt
+        mu1_k = makeMu(1,k,Dt,params)
+        mu2_k = makeMu(2,k,Dt,params)
+        PSI_k = makePSI(A,B,k,N)
+        z0_k = makez0(t,params)
+        UPSILON_k = makeUpsilon(N,k)
+        PHI_k =  makePHI(A,k)
+        LAMBDA_k = makeLambda(A,B,k)
+        XI_k = PHI_k*params.y0 + LAMBDA_k*vcat(params.g, [0])
+
+        
+        # eq51 part 1
+        temp = mu1_k*(1-(F*(XI_k+PSI_k*eta)-z0_k)+((F*(XI_k+PSI_k*eta)-z0_k)*(F*(XI_k+PSI_k*eta)-z0_k))/2) <= transpose(e_sig)*UPSILON_k*eta
+        
+        # eq51 part 2
+        temp = transpose(e_sig)*UPSILON_k*eta <= mu2_k*(1-(F*(XI_k+PSI_k*eta)-z0_k))
+        
+        # eq52 part 1
+        rho1 = params.n*params.T_1*cos(params.phi)
+        rho2 = params.n*params.T_2*cos(params.phi)
+        temp = log(params.m_wet-params.alpha*rho2*t) <= F*(XI_k+PSI_k*eta)
+        
+
+        #eq 52 part 1
+        temp = F*(XI_k+PSI_k*eta) <= log(params.m_wet-params.alpha*rho1*t)
+
+        #||S*x-v||+c^T*x + a <= 0 constraints
         for j = 1:n_s
-            temp = sumsquares(params.S[j]*E*(XI_k+PSI_k*eta)-params.v[j]) + transpose(params.c[j])*E*(XI_k+PSI_k*eta) + params.a[j] <= 0
+            temp = norm(params.S[j]*E*(XI_k+PSI_k*eta)-params.v[j]) + transpose(params.c[j])*E*(XI_k+PSI_k*eta) + params.a[j] <= 0
             push!(constraints,temp)
         end
 
         # TODO I feel like I shouldn't need this
-        if k ==N
-            temp = [Matrix(1.0I,3,3) zeros(Float64,3,4)]*(XI_k+PSI_k*eta) == 0
-            push!(constraints,temp)
-        end
+        # if k == N
+        #     temp = E*(XI_k+PSI_k*eta) == zeros(6,1)
+        #     push!(constraints,temp)
+        # end
     end
 
     return 
@@ -209,25 +269,11 @@ function solveProblem(N,Dt,params)
     constraints = []
     addConstraints!(constraints,A,B,N,Dt,eta,omega,params)
 
-    # for k = 0:N
-    #     UPSILON = makeUpsilon(k);
-    #     E_u*UPSILON<=transpose(e_sig)*UPSILON*
-    # end
-
-
-
-    # for i in 0:N
-    #     UPSILON = makeUpsilon(k);
-    #     PHI = makePHI(A,k);
-    #     PSI = makePSI(A,B,k);
-    #     LAMBDA = makeLambda(A,B,k);
-    # end
-
     cost = transpose(omega)*eta;
     problem = minimize(cost,constraints)
     solver = ECOS.Optimizer
 
-    Convex.solve!(problem, solver, silent=true)
+    Convex.solve!(problem, solver, silent=false)
 
     eta_opt = evaluate(eta)
     # N_opt = evaluate(N)
@@ -267,7 +313,7 @@ end
 
 
 Dt = 0.5;
-N = 160
+N = 3
 
 g = [-3.7114; 0; 0];
 m_dry = 1505; #kg
@@ -278,11 +324,13 @@ T_1 = 0.3*T_bar;
 T_2 = 0.8*T_bar;
 n = 6;
 phi = 27*3.1415/180;
-r0 = [1.5,0,2]*1000 #km -> m
-dr0 = [-75,0,100] #m/s
+# r0 = [1.5,0,2]*1000 #km -> m
+# dr0 = [-75,0,100] #m/s
+r0 = [10,0,0]
+dr0 = [-5,0,0]
 y0 = vcat(r0,dr0,log(m_wet))
 alpha = 1/(I_sp*9.807*cos(phi));
-theta_tilde = 60.0*3.1415/180;
+theta_tilde = 87.0*3.1415/180;
 S = [[0 1 0 0 0 0;
      0 0 1 0 0 0]]
 v = [[0;0]]
