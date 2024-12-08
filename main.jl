@@ -36,7 +36,7 @@ mass consumption rate constant alpha
 """
 function calcAB(Dt,alpha)
     Ac = zeros(Float64,7,7);
-    Ac[1:3,2:4] = Matrix(1.0I, 3, 3);
+    Ac[1:3,4:6] = Matrix(1.0I, 3, 3);
     
     Bc = zeros(Float64, 7, 4);
     Bc[4:6,1:3] = Matrix(1.0I, 3, 3);
@@ -73,7 +73,7 @@ function makePSI(A,B,k,N;m=7,n=4)
     print("N: "); println(N);
     print("n: "); println(n);
     PSI = zeros(Float64,m,n*(N+1)) # number of columns must match number of rows of eta
-    for i in 1:N
+    for i in 1:k
         PSI[:,(i-1)*n+1:i*n] = A^(k-1-(i-1))*B; 
     end
     print("size(psi): "); println(size(PSI))
@@ -83,6 +83,10 @@ end
 function makeLambda(A,B,k;m=7,n=4)
 
     LAMBDA = zeros(Float64,m,n);
+    if k==0
+        return LAMBDA
+    end
+
     for i in 1:k
         LAMBDA += A^(i-1)*B;
     end
@@ -151,7 +155,7 @@ function addConstraints!(constraints,A,B,N,Dt,eta,omega,params::ProblemParameter
         UPSILON_k = makeUpsilon(N,k)
         PHI_k =  makePHI(A,k)
         LAMBDA_k = makeLambda(A,B,k)
-        XI_k = PHI_k*y0 + LAMBDA_k*vcat(params.g, [0])
+        XI_k = PHI_k*params.y0 + LAMBDA_k*vcat(params.g, [0])
 
         println("here:")
         # print("size(XI_k+PHI_k*eta): "); println(size(XI_k+PHI_k*eta))
@@ -220,9 +224,38 @@ function solveProblem(N,Dt,params)
     Convex.solve!(problem, solver, silent=true)
 
     eta_opt = evaluate(eta)
-    N_opt = evaluate(N)
+    # N_opt = evaluate(N)
     
-    return eta_opt,N_opt
+    return eta_opt, A, B
+end
+
+function eom(t,x,u,A,B,ps::ProblemParameters)
+    dx = A*x + B*(vcat(ps.g,[0]) + u)
+    return dx
+end
+
+function calcTrajectory(Dt,N,A,B,eta,ps::ProblemParameters)
+    x = []
+    u = []
+    for k = 1:N
+        t = k*Dt
+        mu1_k = makeMu(1,k,Dt,ps)
+        mu2_k = makeMu(2,k,Dt,ps)
+        PSI_k = makePSI(A,B,k,N)
+        z0_k = makez0(t,ps)
+        UPSILON_k = makeUpsilon(N,k)
+        PHI_k =  makePHI(A,k)
+        LAMBDA_k = makeLambda(A,B,k)
+        XI_k = PHI_k*ps.y0 + LAMBDA_k*vcat(ps.g, [0])
+
+        state = XI_k+PSI_k*eta
+        control = UPSILON_k*eta
+            
+
+        push!(x,state[1:6])
+        push!(u,control[1:3])
+    end
+    return reduce(hcat,x),u
 end
 
 
@@ -253,6 +286,14 @@ print(params)
 
 
 
-solveProblem(N,Dt,params)
+eta_opt, A, B = solveProblem(N,Dt,params)
+# [t,x] = simulateProblem(A,B,)
 
+eta = reshape(eta_opt,:,4)
+x,u = calcTrajectory(Dt,N,A,B,eta_opt,params::ProblemParameters)
 
+print(x)
+
+p = plot(transpose(x))
+display(p)
+# plot(eta[:,1:3])
