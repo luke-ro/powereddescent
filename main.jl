@@ -40,7 +40,7 @@ function calcAB(Dt,alpha)
     
     Bc = zeros(Float64, 7, 4);
     Bc[4:6,1:3] = Matrix(1.0I, 3, 3);
-    Bc[7,4] = alpha;
+    Bc[7,4] = -alpha;
 
     function intB!(dB, B, p, t)
         temp = exp(Ac*(Dt-t))*Bc;
@@ -185,7 +185,13 @@ function addConstraints!(constraints,A,B,N,Dt,eta,omega,params::ProblemParameter
             push!(constraints,temp)
         end
 
+        # TODO I feel like I shouldn't need this
+        if k ==N
+            temp = [Matrix(1.0I,3,3) zeros(Float64,3,4)]*(XI_k+PSI_k*eta) == 0
+            push!(constraints,temp)
+        end
     end
+
     return 
 end
 
@@ -273,16 +279,15 @@ T_2 = 0.8*T_bar;
 n = 6;
 phi = 27*3.1415/180;
 r0 = [1.5,0,2]*1000 #km -> m
-dr0 = [-75,0,0] #m/s
+dr0 = [-75,0,100] #m/s
 y0 = vcat(r0,dr0,log(m_wet))
 alpha = 1/(I_sp*9.807*cos(phi));
-theta_tilde = 87.0*3.1415/180;
+theta_tilde = 60.0*3.1415/180;
 S = [[0 1 0 0 0 0;
-     0 0 1 0 0 0], 
-     [0 0 0 0 0 0]]
-v = [[0;0], [0]]
-c = [[-tan(theta_tilde); 0; 0; 0; 0; 0], [-1; 0; 0; 0; 0; 0]]
-a = [[0],[0]]
+     0 0 1 0 0 0]]
+v = [[0;0]]
+c = [[-tan(theta_tilde); 0; 0; 0; 0; 0]]
+a = [[0]]
 params = ProblemParameters(g,alpha,m_dry,m_wet,I_sp,T_bar,T_1,T_2,n,phi,y0,S,v,c,a)
 # print(params)
 
@@ -298,8 +303,11 @@ x,u = calcTrajectory(Dt,N,A,B,eta_opt,params::ProblemParameters)
 
 # print(x)
 
-p = plot(transpose(x[2:3,:]))
+p = plot(transpose(x[1:3,:]))
 display(p)
 
 p = plot(eta)
+display(p)
+
+p = plot3d(x[2,:],x[3,:],x[1,:])
 display(p)
