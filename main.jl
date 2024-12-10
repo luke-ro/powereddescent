@@ -14,7 +14,7 @@ const E_u = [Matrix(1.0I,3,3) zeros(Float64,3,1)]
 struct ProblemParameters
     g
     alpha
-    m_dr0
+    m_dry
     m_wet
     I_sp
     T_bar
@@ -59,7 +59,7 @@ function calcAB(Dt,alpha)
     A_hat = [Ac Bc; 
             zeros(4,11)]
     
-    temp = exp(A_hat)
+    temp = exp(A_hat*Dt)
     A = temp[1:7,1:7]
     B = temp[1:7,8:11]
 
@@ -71,15 +71,6 @@ function makePHI(A,k)
 end
 
 function makePSI(A,B,k,N;m=7,n=4)
-    # PSI = zeros(Float64,m*N,n*N);
-    # for i in 2:(k+1)
-    #     for j in 1:i-1
-    #         PSI[(i-1)*m+1:i*m, (j-1)*n+1:j*n] = A^(i-2-(j-1))*B; 
-    #     end
-    # end
-    # println("In makePsi:")
-    # print("N: "); println(N);
-    # print("n: "); println(n);
     PSI = zeros(Float64,m,n*(N+1)) # number of columns must match number of rows of eta
     for i in 1:k
         PSI[:,(i-1)*n+1:i*n] = A^(k-1-(i-1))*B; 
@@ -109,7 +100,7 @@ function makeUpsilon(N,k;p=4)
 end
 
 function makeomega(w,N)
-    omega = w*repeat(e_sig,outer=N+1)
+    omega = w*repeat(e_sig, outer=N+1)
     return omega
 end
 
@@ -151,7 +142,8 @@ function addConstraints!(constraints,A,B,N,Dt,eta,omega,params::ProblemParameter
     #constraint in eq50
     for k in 0:N
         UPSILON = makeUpsilon(N,k)
-        push!(constraints,norm(E_u*UPSILON*eta)<=transpose(e_sig)*UPSILON*eta)
+        temp = norm(E_u*UPSILON*eta) <= transpose(e_sig)*UPSILON*eta
+        push!(constraints,temp)
     end
 
     for k in 1:N
@@ -188,14 +180,14 @@ function addConstraints!(constraints,A,B,N,Dt,eta,omega,params::ProblemParameter
         push!(constraints,temp)
 
         #||S*x-v||+c^T*x + a <= 0 constraints
-        # for j = 1:n_s
+        # for j in 1:n_s
         #     temp = norm(params.S[j]*E*(XI_k+PSI_k*eta)-params.v[j]) + transpose(params.c[j])*E*(XI_k+PSI_k*eta) + params.a[j] <= 0
         #     push!(constraints,temp)
         # end
 
         # TODO I feel like I shouldn't need this
         # if k == N
-        #     temp = [Matrix(1.0I,3,3) zeros(3,4)]*(XI_k+PSI_k*eta) == zeros(3,1)
+        #     temp = [Matrix(1.0I,6,6) zeros(6,1)]*(XI_k+PSI_k*eta) == 0*ones(6,1)
         #     push!(constraints,temp)
         # end
     end
@@ -312,34 +304,32 @@ end
 
 
 
-Dt = 0.5;
-N = 3
+Dt = 10;
+N = 7
 
 g = [-3.7114; 0; 0];
 m_dry = 1505; #kg
 m_wet = 1905; #kg
 I_sp = 225; #s
-T_bar = 3.1; #kN
+T_bar = 3.1*1000; #kN -> N
 T_1 = 0.3*T_bar;
 T_2 = 0.8*T_bar;
 n = 6;
-phi = 27*3.1415/180;
-# r0 = [1.5,0,2]*1000 #km -> m
-# dr0 = [-75,0,100] #m/s
-r0 = [10,0,0]
-dr0 = [-5,0,0]
+phi = 27.0*3.1415/180;
+r0 = [1.5,0,2]*1000 #km -> m
+dr0 = [-75,0,100] #m/s
+# r0 = [10,0,0]
+# dr0 = [-5,0,0]
 y0 = vcat(r0,dr0,log(m_wet))
 alpha = 1/(I_sp*9.807*cos(phi));
-theta_tilde = 87.0*3.1415/180;
+theta_tilde = 86.0*3.1415/180;
 S = [[0 1 0 0 0 0;
      0 0 1 0 0 0]]
 v = [[0;0]]
 c = [[-tan(theta_tilde); 0; 0; 0; 0; 0]]
 a = [[0]]
 params = ProblemParameters(g,alpha,m_dry,m_wet,I_sp,T_bar,T_1,T_2,n,phi,y0,S,v,c,a)
-# print(params)
-
-
+print(params)
 
 
 eta_opt, A, B = solveProblem(N,Dt,params)
