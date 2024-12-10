@@ -180,16 +180,16 @@ function addConstraints!(constraints,A,B,N,Dt,eta,omega,params::ProblemParameter
         push!(constraints,temp)
 
         #||S*x-v||+c^T*x + a <= 0 constraints
-        # for j in 1:n_s
-        #     temp = norm(params.S[j]*E*(XI_k+PSI_k*eta)-params.v[j]) + transpose(params.c[j])*E*(XI_k+PSI_k*eta) + params.a[j] <= 0
-        #     push!(constraints,temp)
-        # end
+        for j in 1:n_s
+            temp = norm(params.S[j]*E*(XI_k+PSI_k*eta)-params.v[j]) + transpose(params.c[j])*E*(XI_k+PSI_k*eta) + params.a[j] <= 0
+            push!(constraints,temp)
+        end
 
         # TODO I feel like I shouldn't need this
-        # if k == N
-        #     temp = [Matrix(1.0I,6,6) zeros(6,1)]*(XI_k+PSI_k*eta) == 0*ones(6,1)
-        #     push!(constraints,temp)
-        # end
+        if k == N
+            temp = [Matrix(1.0I,6,6) zeros(6,1)]*(XI_k+PSI_k*eta) == 0*ones(6,1)
+            push!(constraints,temp)
+        end
     end
 
     return 
@@ -304,8 +304,8 @@ end
 
 
 
-Dt = 10;
-N = 7
+Dt = .5;
+N = 144
 
 g = [-3.7114; 0; 0];
 m_dry = 1505; #kg
