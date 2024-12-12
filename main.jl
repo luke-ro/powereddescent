@@ -143,10 +143,50 @@ function makeMu(num,k,Dt,ps::ProblemParameters)
     return mu
 end
 
-"""
+function simulateTrajectory(simulation_Dt,guidance_update_Dt,ps::ProblemParameters)
+    F,G = calcAB(simulation_Dt, ps.alpha)
 
-"""
-function addConstraints!(constraints,A,B,N,Dt,eta,omega,params::ProblemParameters;m=7,n=4)
+    guidance_Dk = Int(round(guidance_update_Dt/simulation_Dt));
+
+    x_hist = [ps.y0]
+    t_hist = []
+    control_hist = []
+
+    x = ps.y0
+    eta = []
+    t = 0
+    k = 0
+    while x[1] > 0.0
+        if k % guidance_Dk == 0
+            eta = runGuidance(x,simulation_Dt,ps)
+        end
+
+        i = (k % guidance_Dk)+1
+        u = eta[(i-1)*4+1: i*4]
+
+        x = F*x + G*[u + ps.g]
+
+        push!(x_hist,x)
+        push!(t_hist,t)
+        push!(control_hist, u)
+
+
+        t += Dt
+        k += 1
+    end
+    return reduce(hcat,t_hist), reduce(hcat,x_hist), reduce(hcat,control_hist)
+end
+
+function runGuidance(x,Dt,ps::ProblemParameters)
+    # run low fidelity optimization
+    # optimizeProblem(Dt,ps)
+
+    # run higher fidelity optimization
+
+    #return control
+end
+
+function addConstraints!(constraints,x0,A,B,N,Dt,eta,omega,params::ProblemParameters;m=7,n=4)
     n_s = size(a,1) #number of constraints for ||S*x-v||+c^T*x + a <= 0
 
     #constraint in eq50
@@ -165,7 +205,7 @@ function addConstraints!(constraints,A,B,N,Dt,eta,omega,params::ProblemParameter
         UPSILON_k = makeUpsilon(N,k)
         PHI_k =  makePHI(A,k)
         LAMBDA_k = makeLambda(A,B,k)
-        XI_k = PHI_k*params.y0 + LAMBDA_k*vcat(params.g, [0])
+        XI_k = PHI_k*x0 + LAMBDA_k*vcat(params.g, [0])
 
         # println("here:")
         # print("size(XI_k+PHI_k*eta): "); println(size(XI_k+PHI_k*eta))
@@ -211,13 +251,18 @@ function addConstraints!(constraints,A,B,N,Dt,eta,omega,params::ProblemParameter
     return 
 end
 
-function solveProblem(Dt,ps::ProblemParameters)
+function optimizeProblem(x0,Dt,ps::ProblemParameters; N_min=[], N_max=[])
     rho1 = makeRho(1,ps)
     rho2 = makeRho(2,ps)
     t_min = (ps.m_wet-ps.m_dry)*norm(ps.y0[4:6])/rho2
     t_max = (ps.m_wet-ps.m_dry)/ps.alpha/rho1
-    N_min = Int(floor(t_min/Dt)+1)
-    N_max = Int(floor(t_max/Dt)+1)
+    if N_min == []
+        N_min = Int(floor(t_min/Dt)+1)
+    end
+
+    if N_max == []
+        N_max = Int(floor(t_max/Dt)+1)
+    end
 
     cost_min = typemax(Float64)
     eta_opt = []
@@ -226,7 +271,7 @@ function solveProblem(Dt,ps::ProblemParameters)
     N_opt = N_min
     for N in N_min:N_max
         print("Checking N=$(N): ")
-        eta, cost, A, B, feasible = solveSubproblem(N,Dt,ps)
+        eta, cost, A, B, feasible = solveSubproblem(x0,N,Dt,ps)
         if feasible && cost < cost_min 
             println("More optimal. Cost of $(cost)")
             cost_min = cost
@@ -244,7 +289,7 @@ function solveProblem(Dt,ps::ProblemParameters)
     return eta_opt,N_opt,A,B,solved
 end
 
-function solveSubproblem(N,Dt,params)
+function solveSubproblem(x0,N,Dt,params)
     A,B = calcAB(Dt,params.alpha);
     m = size(B,2);
     n = size(B,1);
@@ -256,13 +301,13 @@ function solveSubproblem(N,Dt,params)
     omega = makeomega(w,N)#probably need to turn this into a 1d Vector
 
     constraints = []
-    addConstraints!(constraints,A,B,N,Dt,eta,omega,params)
+    addConstraints!(constraints,x0,A,B,N,Dt,eta,omega,params)
 
     cost = transpose(omega)*eta;
     problem = minimize(cost,constraints)
     solver = ECOS.Optimizer
 
-    Convex.solve!(problem, solver, silent=false)
+    Convex.solve!(problem, solver, silent=true)
 
     eta_opt = evaluate(eta)
     # N_opt = evaluate(N)
@@ -363,7 +408,7 @@ params = ProblemParameters(g,alpha,m_dry,m_wet,I_sp,T_bar,T_1,T_2,n,phi,y0,S,v,c
 print(params)
 
 Dt = 5;
-eta_opt, N, A, B, solved = solveProblem(Dt,params)
+eta_opt, N, A, B, solved = optimizeProblem(Dt,params)
 # [t,x] = simulateProblem(A,B,)
 # print(reshape(eta_opt,4,:))
 
