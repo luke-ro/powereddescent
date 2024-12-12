@@ -507,7 +507,7 @@ Dt = 0.5
 N = 144
 eta, cost, A, B, feasible = solveSubproblem(y0,N,Dt,deepcopy(prob_params))
 pos_hist,vel_hist,acc_hist,force_hist,throttle_hist,theta_hist = calcTrajectory(Dt,N,A,B,eta,prob_params)
-makePlots(0:Dt:(N-1)*Dt,pos_hist,vel_hist,acc_hist,force_hist,throttle_hist,theta_hist,prob_params)
+makePlots(0:Dt:(N)*Dt,pos_hist,vel_hist,acc_hist,force_hist,throttle_hist,theta_hist,prob_params)
 
 
 Dt = 5;
