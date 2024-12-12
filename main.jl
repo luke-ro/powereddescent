@@ -148,7 +148,7 @@ function simulateTrajectory(simulation_Dt,guidance_update_Dt,ps::ProblemParamete
 
     guidance_Dk = Int(round(guidance_update_Dt/simulation_Dt));
 
-    x_hist = [ps.y0]
+    x_hist = []
     t_hist = []
     control_hist = []
 
@@ -156,10 +156,16 @@ function simulateTrajectory(simulation_Dt,guidance_update_Dt,ps::ProblemParamete
     eta = []
     t = 0
     k = 0
+    completed = true
     while x[1] > 0.0
+        #guidnace loop
         if k % guidance_Dk == 0
             ps.m_wet = exp(x[7])
-            eta,N = runGuidance(x,simulation_Dt,ps)
+            eta,N,feasible = runGuidance(x,simulation_Dt,ps)
+            if !feasible
+                completed = false
+                break
+            end
         end
 
         i = (k % guidance_Dk)+1
@@ -175,20 +181,20 @@ function simulateTrajectory(simulation_Dt,guidance_update_Dt,ps::ProblemParamete
         t += simulation_Dt
         k += 1
     end
-    return transpose(reduce(hcat,t_hist)), reduce(hcat,x_hist), reduce(hcat,control_hist)
+    return transpose(reduce(hcat,t_hist)), reduce(hcat,x_hist), reduce(hcat,control_hist), completed
 end
 
 function runGuidance(x,Dt,ps::ProblemParameters)
     # run low fidelity optimization
     eta,N,A,B,solved = optimizeProblem(x,Dt,ps)
-    print("Solved: ")
-    println(solved)
+    # print("Solved: ")
+    # println(solved)
 
     # run higher fidelity optimization
     # eta_prime,cost,A,B,solved = optimizeProblem(x,N,Dt,ps)
 
     #return control
-    return eta,N
+    return eta,N,solved
 end
 
 function addConstraints!(constraints,x0,A,B,N,Dt,eta,omega,params::ProblemParameters;m=7,n=4)
@@ -407,7 +413,7 @@ function calcTrajParams(t_hist,x_hist,u_hist,ps::ProblemParameters)
         
         
         push!(pos_hist,x[1:3])
-        println(x)
+        # println(x)
         push!(vel_hist,x[4:6])
         push!(acc_hist,u[1:3])
         push!(force_hist,u[1:3].*m)
@@ -451,7 +457,7 @@ Dt = 5;
 # [t,x] = simulateProblem(A,B,)
 # print(reshape(eta_opt,4,:))
 
-t_hist,x_hist,u_hist = simulateTrajectory(4,4,params)
+t_hist,x_hist,u_hist,completed = simulateTrajectory(4,4,params)
 pos_hist,vel_hist,acc_hist,force_hist,throttle_hist,theta_hist = calcTrajParams(t_hist,x_hist,u_hist,params)
 makePlots(t_hist,pos_hist,vel_hist,acc_hist,force_hist,throttle_hist,theta_hist,params)
 # print(t_hist)
