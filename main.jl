@@ -157,20 +157,22 @@ function simulateTrajectory(simulation_Dt,guidance_update_Dt,ps::ProblemParamete
     eta = []
     t = 0
     k = 0
+    i = 1
     completed = true
     cost = 0
     while x[1] > 0.0
         #guidnace loop
-        if k % guidance_Dk == 0
+        if k % guidance_Dk == 0 && x[1] > 250
             ps.m_wet = exp(x[7])
             eta,N,feasible = runGuidance(x,simulation_Dt,ps)
             if !feasible
                 completed = false
                 break
             end
+            i=1
         end
 
-        i = (k % guidance_Dk)+1
+        
         u = eta[(i-1)*4+1: i*4]
 
         x = A*x + B*(u*thrust_disp .+ vcat(ps.g,[0]))
@@ -183,6 +185,7 @@ function simulateTrajectory(simulation_Dt,guidance_update_Dt,ps::ProblemParamete
         println(x)
         t += simulation_Dt
         k += 1
+        i += 1
     end
     return transpose(reduce(hcat,t_hist)), reduce(hcat,x_hist), reduce(hcat,control_hist), completed, cost
 end
@@ -342,6 +345,10 @@ end
 
 function calcTrajectory(Dt,N,A,B,eta,ps::ProblemParameters)
     x = []
+    pos_hist = []
+    vel_hist = []
+    acc_hist = []
+    force_hist = []
     u = []
     m = []
     throttle = []
@@ -362,13 +369,14 @@ function calcTrajectory(Dt,N,A,B,eta,ps::ProblemParameters)
         mass = exp(state[7])
         theta = acos(dot(control[1:3]/norm(control[1:3]),[1;0;0]))
 
-        push!(x,state[1:6])
-        push!(u,control[1:3])
-        push!(m,mass)
+        push!(pos_hist,state[1:3])
+        push!(vel_hist,state[4:6])
+        push!(acc_hist,control[1:3])
+        push!(force_hist,control[1:3].*mass)
         push!(throttle,control[4]*mass/ps.T_bar/cos(ps.phi)/6)
         push!(theta_hist,theta)
     end
-    return reduce(hcat,x),reduce(hcat,u),reduce(hcat,m),reduce(hcat,throttle),reduce(hcat,theta_hist)
+    return reduce(hcat,pos_hist),reduce(hcat,vel_hist),reduce(hcat,acc_hist),reduce(hcat,force_hist),reduce(hcat,throttle),reduce(hcat,theta_hist)
 end
 
 function makePlots(t,pos,vel,acc,force,throttle,theta,params::ProblemParameters)
@@ -436,6 +444,7 @@ function monteCarloThrustDisp(n,ps::ProblemParameters)
     xf_hist = []
     cost_hist = []
     disp_hist = []
+    comp_hist = []
     for i in 1:n
         thrust_disp = rand(d)
         t_hist,x_hist,u_hist,completed,cost = simulateTrajectory(4,4,ps,thrust_disp=thrust_disp)
@@ -444,17 +453,18 @@ function monteCarloThrustDisp(n,ps::ProblemParameters)
         push!(tf_hist,t_hist[end])
         push!(xf_hist, x_hist[:,end])
         push!(cost_hist,cost)
+        push!(comp_hist,completed)
     end
-    return reduce(hcat,tf_hist),reduce(hcat,xf_hist),reduce(hcat,cost_hist),reduce(hcat,disp_hist)
+    return reduce(hcat,tf_hist),reduce(hcat,xf_hist),reduce(hcat,cost_hist),reduce(hcat,disp_hist),reduce(hcat,comp_hist)
 end
 
 function vecnorm(A,d)
     return sqrt.(sum(abs2,A,[d]))
 end
 
-function makeMonteCarloPlots(dispersion,tf,xf,cost; fs=8)
+function makeMonteCarloPlots(dispersion,tf,xf,cost,feasible; fs=8)
     dispersion = transpose(dispersion)
-    p1 = scatter(dispersion,transpose(tf),tickfontsize=fs,linewidth=2,legend=false)
+    p1 = scatter(dispersion,transpose(tf),marker_z=feasible,tickfontsize=fs,linewidth=2,legend=false)
     ylabel!("Final Time [s]",labelfontsize=fs)
     p2 = scatter(dispersion,norm.(eachcol(xf[1:3,:])),tickfontsize=fs,linewidth=2,legend=false)
     ylabel!("Final position error",labelfontsize=fs)
@@ -463,6 +473,7 @@ function makeMonteCarloPlots(dispersion,tf,xf,cost; fs=8)
 
     p = plot(p1,p2,p3,layout=(3,1))
     display(p)
+    return p
 end
 
 
@@ -490,21 +501,28 @@ a = [[0]]
 prob_params = ProblemParameters(g,alpha,m_dry,m_wet,I_sp,T_bar,T_1,T_2,n,phi,y0,S,v,c,a)
 # print(params)
 
+
+## replicate papre result
+Dt = 0.5
+N = 144
+eta, cost, A, B, feasible = solveSubproblem(y0,N,Dt,deepcopy(prob_params))
+pos_hist,vel_hist,acc_hist,force_hist,throttle_hist,theta_hist = calcTrajectory(Dt,N,A,B,eta,prob_params)
+makePlots(0:Dt:(N-1)*Dt,pos_hist,vel_hist,acc_hist,force_hist,throttle_hist,theta_hist,prob_params)
+
+
 Dt = 5;
 # eta_opt, N, A, B, solved = optimizeProblem(Dt,params)
 # [t,x] = simulateProblem(A,B,)
 # print(reshape(eta_opt,4,:))
 
-t_hist,x_hist,u_hist,completed,cost = simulateTrajectory(4,4,prob_params)
+t_hist,x_hist,u_hist,completed,cost = simulateTrajectory(4,4,deepcopy(prob_params))
 pos_hist,vel_hist,acc_hist,force_hist,throttle_hist,theta_hist = calcTrajParams(t_hist,x_hist,u_hist,prob_params)
 makePlots(t_hist,pos_hist,vel_hist,acc_hist,force_hist,throttle_hist,theta_hist,prob_params)
-# print(t_hist)
-
-
 
 # optimizeProblem(y0,Dt,prob_params)
-tf_hist,xf_hist,cost_hist,disp_hist = monteCarloThrustDisp(3,prob_params)
-makeMonteCarloPlots(disp_hist,tf_hist,xf_hist,cost_hist)
+tf_hist,xf_hist,cost_hist,disp_hist,feasible_hist = monteCarloThrustDisp(3,prob_params)
+println(feasible_hist)
+p = makeMonteCarloPlots(disp_hist,tf_hist,xf_hist,cost_hist,feasible_hist)
 # eta = transpose(reshape(eta_opt,4,:))
 # x,u,mass_hist,throttle_hist,theta_hist = calcTrajectory(Dt,N,A,B,eta_opt,params::ProblemParameters)
 # println(size(x))
