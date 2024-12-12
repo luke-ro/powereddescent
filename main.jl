@@ -6,6 +6,7 @@ using ECOS
 using Clarabel
 using LaTeXStrings
 using MathOptInterface
+using Distributions, Random
 
 
 const e_sig = [0.0; 0; 0; 1];
@@ -143,8 +144,8 @@ function makeMu(num,k,Dt,ps::ProblemParameters)
     return mu
 end
 
-function simulateTrajectory(simulation_Dt,guidance_update_Dt,ps::ProblemParameters)
-    F,G = calcAB(simulation_Dt, ps.alpha)
+function simulateTrajectory(simulation_Dt,guidance_update_Dt,ps::ProblemParameters;thrust_disp=1)
+    A,B = calcAB(simulation_Dt, ps.alpha)
 
     guidance_Dk = Int(round(guidance_update_Dt/simulation_Dt));
 
@@ -157,6 +158,7 @@ function simulateTrajectory(simulation_Dt,guidance_update_Dt,ps::ProblemParamete
     t = 0
     k = 0
     completed = true
+    cost = 0
     while x[1] > 0.0
         #guidnace loop
         if k % guidance_Dk == 0
@@ -171,17 +173,18 @@ function simulateTrajectory(simulation_Dt,guidance_update_Dt,ps::ProblemParamete
         i = (k % guidance_Dk)+1
         u = eta[(i-1)*4+1: i*4]
 
-        x = F*x + G*(u .+ vcat(ps.g,[0]))
+        x = A*x + B*(u*thrust_disp .+ vcat(ps.g,[0]))
 
         push!(x_hist,x)
         push!(t_hist,t)
         push!(control_hist, u)
+        cost += transpose(e_sig)*u
 
         println(x)
         t += simulation_Dt
         k += 1
     end
-    return transpose(reduce(hcat,t_hist)), reduce(hcat,x_hist), reduce(hcat,control_hist), completed
+    return transpose(reduce(hcat,t_hist)), reduce(hcat,x_hist), reduce(hcat,control_hist), completed, cost
 end
 
 function runGuidance(x,Dt,ps::ProblemParameters)
@@ -426,6 +429,41 @@ function calcTrajParams(t_hist,x_hist,u_hist,ps::ProblemParameters)
     return reduce(hcat,pos_hist),reduce(hcat,vel_hist),reduce(hcat,acc_hist),reduce(hcat,force_hist),reduce(hcat,throttle_hist),reduce(hcat,theta_hist)
 end
 
+function monteCarloThrustDisp(n,ps::ProblemParameters)
+    d = Normal(1.0, 0.01)
+
+    tf_hist = []
+    xf_hist = []
+    cost_hist = []
+    disp_hist = []
+    for i in 1:n
+        thrust_disp = rand(d)
+        t_hist,x_hist,u_hist,completed,cost = simulateTrajectory(4,4,ps,thrust_disp=thrust_disp)
+        
+        push!(disp_hist,thrust_disp)
+        push!(tf_hist,t_hist[end])
+        push!(xf_hist, x_hist[:,end])
+        push!(cost_hist,cost)
+    end
+    return reduce(hcat,tf_hist),reduce(hcat,xf_hist),reduce(hcat,cost_hist),reduce(hcat,disp_hist)
+end
+
+function vecnorm(A,d)
+    return sqrt.(sum(abs2,A,[d]))
+end
+
+function makeMonteCarloPlots(dispersion,tf,xf,cost; fs=8)
+    dispersion = transpose(dispersion)
+    p1 = scatter(dispersion,transpose(tf),tickfontsize=fs,linewidth=2,legend=false)
+    ylabel!("Final Time [s]",labelfontsize=fs)
+    p2 = scatter(dispersion,norm.(eachcol(xf[1:3,:])),tickfontsize=fs,linewidth=2,legend=false)
+    ylabel!("Final position error",labelfontsize=fs)
+    p3 = scatter(dispersion,transpose(cost),tickfontsize=fs,linewidth=2,legend=false)
+    ylabel!("Cost",labelfontsize=fs)
+
+    p = plot(p1,p2,p3,layout=(3,1))
+    display(p)
+end
 
 
 g = [-3.7114; 0; 0];
@@ -449,7 +487,7 @@ S = [[0 1 0 0 0 0;
 v = [[0;0]]
 c = [[-tan(theta_tilde); 0; 0; 0; 0; 0]]
 a = [[0]]
-params = ProblemParameters(g,alpha,m_dry,m_wet,I_sp,T_bar,T_1,T_2,n,phi,y0,S,v,c,a)
+prob_params = ProblemParameters(g,alpha,m_dry,m_wet,I_sp,T_bar,T_1,T_2,n,phi,y0,S,v,c,a)
 # print(params)
 
 Dt = 5;
@@ -457,13 +495,16 @@ Dt = 5;
 # [t,x] = simulateProblem(A,B,)
 # print(reshape(eta_opt,4,:))
 
-t_hist,x_hist,u_hist,completed = simulateTrajectory(4,4,params)
-pos_hist,vel_hist,acc_hist,force_hist,throttle_hist,theta_hist = calcTrajParams(t_hist,x_hist,u_hist,params)
-makePlots(t_hist,pos_hist,vel_hist,acc_hist,force_hist,throttle_hist,theta_hist,params)
+t_hist,x_hist,u_hist,completed,cost = simulateTrajectory(4,4,prob_params)
+pos_hist,vel_hist,acc_hist,force_hist,throttle_hist,theta_hist = calcTrajParams(t_hist,x_hist,u_hist,prob_params)
+makePlots(t_hist,pos_hist,vel_hist,acc_hist,force_hist,throttle_hist,theta_hist,prob_params)
 # print(t_hist)
 
-optimizeProblem(y0,Dt,params)
 
+
+# optimizeProblem(y0,Dt,prob_params)
+tf_hist,xf_hist,cost_hist,disp_hist = monteCarloThrustDisp(3,prob_params)
+makeMonteCarloPlots(disp_hist,tf_hist,xf_hist,cost_hist)
 # eta = transpose(reshape(eta_opt,4,:))
 # x,u,mass_hist,throttle_hist,theta_hist = calcTrajectory(Dt,N,A,B,eta_opt,params::ProblemParameters)
 # println(size(x))
