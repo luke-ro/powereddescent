@@ -13,7 +13,7 @@ const E = [Matrix(1.0I,6,6) zeros(Float64,6,1)];
 const F = [zeros(Float64,1,6) 1];
 const E_u = [Matrix(1.0I,3,3) zeros(Float64,3,1)]
 
-struct ProblemParameters
+mutable struct ProblemParameters
     g
     alpha
     m_dry
@@ -158,32 +158,37 @@ function simulateTrajectory(simulation_Dt,guidance_update_Dt,ps::ProblemParamete
     k = 0
     while x[1] > 0.0
         if k % guidance_Dk == 0
-            eta = runGuidance(x,simulation_Dt,ps)
+            ps.m_wet = exp(x[7])
+            eta,N = runGuidance(x,simulation_Dt,ps)
         end
 
         i = (k % guidance_Dk)+1
         u = eta[(i-1)*4+1: i*4]
 
-        x = F*x + G*[u + ps.g]
+        x = F*x + G*(u .+ vcat(ps.g,[0]))
 
         push!(x_hist,x)
         push!(t_hist,t)
         push!(control_hist, u)
 
-
-        t += Dt
+        println(x)
+        t += simulation_Dt
         k += 1
     end
-    return reduce(hcat,t_hist), reduce(hcat,x_hist), reduce(hcat,control_hist)
+    return transpose(reduce(hcat,t_hist)), reduce(hcat,x_hist), reduce(hcat,control_hist)
 end
 
 function runGuidance(x,Dt,ps::ProblemParameters)
     # run low fidelity optimization
-    # optimizeProblem(Dt,ps)
+    eta,N,A,B,solved = optimizeProblem(x,Dt,ps)
+    print("Solved: ")
+    println(solved)
 
     # run higher fidelity optimization
+    # eta_prime,cost,A,B,solved = optimizeProblem(x,N,Dt,ps)
 
     #return control
+    return eta,N
 end
 
 function addConstraints!(constraints,x0,A,B,N,Dt,eta,omega,params::ProblemParameters;m=7,n=4)
@@ -254,7 +259,7 @@ end
 function optimizeProblem(x0,Dt,ps::ProblemParameters; N_min=[], N_max=[])
     rho1 = makeRho(1,ps)
     rho2 = makeRho(2,ps)
-    t_min = (ps.m_wet-ps.m_dry)*norm(ps.y0[4:6])/rho2
+    t_min = (ps.m_wet-ps.m_dry)*norm(x0[4:6])/rho2
     t_max = (ps.m_wet-ps.m_dry)/ps.alpha/rho1
     if N_min == []
         N_min = Int(floor(t_min/Dt)+1)
@@ -270,15 +275,15 @@ function optimizeProblem(x0,Dt,ps::ProblemParameters; N_min=[], N_max=[])
     B = []
     N_opt = N_min
     for N in N_min:N_max
-        print("Checking N=$(N): ")
+        # print("Checking N=$(N): ")
         eta, cost, A, B, feasible = solveSubproblem(x0,N,Dt,ps)
         if feasible && cost < cost_min 
-            println("More optimal. Cost of $(cost)")
+            # println("More optimal. Cost of $(cost)")
             cost_min = cost
             eta_opt = eta
             N_opt = N
         else
-            println()
+            # println()
         end
     end 
 
@@ -357,21 +362,24 @@ function calcTrajectory(Dt,N,A,B,eta,ps::ProblemParameters)
     return reduce(hcat,x),reduce(hcat,u),reduce(hcat,m),reduce(hcat,throttle),reduce(hcat,theta_hist)
 end
 
-function makePlots(t,eta_opt,x,u,mass_hist,throttle_hist,theta_hist,params::ProblemParameters)
+function makePlots(t,pos,vel,acc,force,throttle,theta,params::ProblemParameters)
     data = []
     fs = 8
 
-    p1 = plot(t,transpose(x[1:3,:])/1000,tickfontsize=fs,linewidth=2,labels=["x" "y" "z"])
+    # println(t)
+    # println(throttle)
+    # p1 = plot([0; 1],[0; 1])
+    p1 = plot(t,transpose(pos)/1000,tickfontsize=fs,linewidth=2,legend=false)#,labels=["x" "y" "z"])
     ylabel!("Position [km]",labelfontsize=fs)
-    p2 = plot(t,transpose(x[4:6,:]),tickfontsize=fs,linewidth=2,legend=false)
+    p2 = plot(t,transpose(vel),tickfontsize=fs,linewidth=2,legend=false)
     ylabel!("Velocity [m/s]",labelfontsize=fs)
-    p3 = plot(t,transpose(u[1:3,:]),tickfontsize=fs,linewidth=2,legend=false)
+    p3 = plot(t,transpose(acc),tickfontsize=fs,linewidth=2,legend=false)
     ylabel!("Acceleration [m/s/s]",labelfontsize=fs)
-    p4 = plot(t,transpose(u[1:3,:].*mass_hist),tickfontsize=fs,linewidth=2,legend=false)
+    p4 = plot(t,transpose(force),tickfontsize=fs,linewidth=2,legend=false)
     ylabel!("Control Force",labelfontsize=fs)
-    p5 = plot(t,transpose(throttle_hist),tickfontsize=fs,linewidth=2,legend=false)
+    p5 = plot(t,transpose(throttle),tickfontsize=fs,linewidth=2,legend=false)
     ylabel!("Throttle %",labelfontsize=fs)
-    p6 = plot(t,transpose(theta_hist).*180/3.1415,tickfontsize=fs,linewidth=2,legend=false)
+    p6 = plot(t,transpose(theta).*180/3.1415,tickfontsize=fs,linewidth=2,legend=false)
     ylabel!(L"\theta ",labelfontsize=fs)
 
     # Add each plot to the subplot grid
@@ -379,6 +387,37 @@ function makePlots(t,eta_opt,x,u,mass_hist,throttle_hist,theta_hist,params::Prob
   
     # Display the plot
     display(p)
+end
+
+function calcTrajParams(t_hist,x_hist,u_hist,ps::ProblemParameters)
+    pos_hist = []
+    vel_hist = []
+    acc_hist = []
+    force_hist = []
+    throttle_hist = []
+    theta_hist = []
+
+    for i in 1:size(t_hist,1)
+        t = t_hist[i]
+        x = x_hist[:,i]
+        u = u_hist[:,i]
+        m = exp(x[7])
+        throttle = u[4]*m/ps.T_bar/cos(ps.phi)/ps.n
+        theta = acos(dot(u[1:3]/norm(u[1:3]),[1;0;0]))
+        
+        
+        push!(pos_hist,x[1:3])
+        println(x)
+        push!(vel_hist,x[4:6])
+        push!(acc_hist,u[1:3])
+        push!(force_hist,u[1:3].*m)
+        push!(throttle_hist,throttle)
+        push!(theta_hist,theta)
+
+        # print("Throttle hist:")
+        # println(reduce(hcat,throttle_hist))
+    end
+    return reduce(hcat,pos_hist),reduce(hcat,vel_hist),reduce(hcat,acc_hist),reduce(hcat,force_hist),reduce(hcat,throttle_hist),reduce(hcat,theta_hist)
 end
 
 
@@ -405,16 +444,23 @@ v = [[0;0]]
 c = [[-tan(theta_tilde); 0; 0; 0; 0; 0]]
 a = [[0]]
 params = ProblemParameters(g,alpha,m_dry,m_wet,I_sp,T_bar,T_1,T_2,n,phi,y0,S,v,c,a)
-print(params)
+# print(params)
 
 Dt = 5;
-eta_opt, N, A, B, solved = optimizeProblem(Dt,params)
+# eta_opt, N, A, B, solved = optimizeProblem(Dt,params)
 # [t,x] = simulateProblem(A,B,)
 # print(reshape(eta_opt,4,:))
 
-eta = transpose(reshape(eta_opt,4,:))
-x,u,mass_hist,throttle_hist,theta_hist = calcTrajectory(Dt,N,A,B,eta_opt,params::ProblemParameters)
-println(size(x))
-t=0:Dt:(N)*Dt
-makePlots(t,eta_opt,x,u,mass_hist,throttle_hist,theta_hist,params)
+t_hist,x_hist,u_hist = simulateTrajectory(4,4,params)
+pos_hist,vel_hist,acc_hist,force_hist,throttle_hist,theta_hist = calcTrajParams(t_hist,x_hist,u_hist,params)
+makePlots(t_hist,pos_hist,vel_hist,acc_hist,force_hist,throttle_hist,theta_hist,params)
+# print(t_hist)
+
+optimizeProblem(y0,Dt,params)
+
+# eta = transpose(reshape(eta_opt,4,:))
+# x,u,mass_hist,throttle_hist,theta_hist = calcTrajectory(Dt,N,A,B,eta_opt,params::ProblemParameters)
+# println(size(x))
+# t=0:Dt:(N)*Dt
+# makePlots(t,eta_opt,x,u,mass_hist,throttle_hist,theta_hist,params)
 
