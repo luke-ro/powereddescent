@@ -4,6 +4,8 @@ using Plots
 using Convex
 using ECOS
 using Clarabel
+using LaTeXStrings
+using MathOptInterface
 
 
 const e_sig = [0.0; 0; 0; 1];
@@ -119,12 +121,20 @@ function makez0(t,ps::ProblemParameters)
     return log(ps.m_wet-ps.alpha*rho2*t)
 end
 
+function makeRho(num,ps::ProblemParameters)
+    if num==1
+        return rho = ps.n*ps.T_1*cos(ps.phi) #eq3
+    else
+        return rho = ps.n*ps.T_2*cos(ps.phi) #eq3
+    end
+end
+
 function makeMu(num,k,Dt,ps::ProblemParameters)
     t = Dt*k;
     if num==1
-        rho = ps.n*ps.T_1*cos(ps.phi) #eq3
+        rho = makeRho(num,ps)
     elseif num==2
-        rho = ps.n*ps.T_2*cos(ps.phi) #eq3
+        rho = makeRho(num,ps)
     else
         throw("Unrecognized number for Mu in MakeMu")
     end
@@ -185,69 +195,56 @@ function addConstraints!(constraints,A,B,N,Dt,eta,omega,params::ProblemParameter
             push!(constraints,temp)
         end
 
-        # TODO I feel like I shouldn't need this
         if k == N
             temp = [Matrix(1.0I,6,6) zeros(6,1)]*(XI_k+PSI_k*eta) == 0*ones(6,1)
             push!(constraints,temp)
-        end
-    end
 
-    return 
-end
+            temp = [0 1 0 0;
+                    0 0 1 0]*UPSILON_k*eta == [0;0]
+            push!(constraints,temp)
 
-function testConstraints!(A,B,N,Dt,eta,omega,params::ProblemParameters;m=7,n=4)
-    n_s = size(a,1) #number of constraints for ||S*x-v||+c^T*x + a <= 0
-
-    #constraint in eq50
-    for k in 0:N
-        UPSILON = makeUpsilon(N,k)
-        temp = norm(E_u*UPSILON*eta) <= transpose(e_sig)*UPSILON*eta
-    end
-
-    for k in 1:N
-        t = k*Dt
-        mu1_k = makeMu(1,k,Dt,params)
-        mu2_k = makeMu(2,k,Dt,params)
-        PSI_k = makePSI(A,B,k,N)
-        z0_k = makez0(t,params)
-        UPSILON_k = makeUpsilon(N,k)
-        PHI_k =  makePHI(A,k)
-        LAMBDA_k = makeLambda(A,B,k)
-        XI_k = PHI_k*params.y0 + LAMBDA_k*vcat(params.g, [0])
-
-        
-        # eq51 part 1
-        temp = mu1_k*(1-(F*(XI_k+PSI_k*eta)-z0_k)+((F*(XI_k+PSI_k*eta)-z0_k)*(F*(XI_k+PSI_k*eta)-z0_k))/2) <= transpose(e_sig)*UPSILON_k*eta
-        
-        # eq51 part 2
-        temp = transpose(e_sig)*UPSILON_k*eta <= mu2_k*(1-(F*(XI_k+PSI_k*eta)-z0_k))
-        
-        # eq52 part 1
-        rho1 = params.n*params.T_1*cos(params.phi)
-        rho2 = params.n*params.T_2*cos(params.phi)
-        temp = log(params.m_wet-params.alpha*rho2*t) <= F*(XI_k+PSI_k*eta)
-        
-
-        #eq 52 part 1
-        temp = F*(XI_k+PSI_k*eta) <= log(params.m_wet-params.alpha*rho1*t)
-
-        #||S*x-v||+c^T*x + a <= 0 constraints
-        for j = 1:n_s
-            temp = norm(params.S[j]*E*(XI_k+PSI_k*eta)-params.v[j]) + transpose(params.c[j])*E*(XI_k+PSI_k*eta) + params.a[j] <= 0
+            temp = [1 0 0 0]*UPSILON_k*eta >= 0
             push!(constraints,temp)
         end
-
-        # TODO I feel like I shouldn't need this
-        # if k == N
-        #     temp = E*(XI_k+PSI_k*eta) == zeros(6,1)
-        #     push!(constraints,temp)
-        # end
     end
 
     return 
 end
 
-function solveProblem(N,Dt,params)
+function solveProblem(Dt,ps::ProblemParameters)
+    rho1 = makeRho(1,ps)
+    rho2 = makeRho(2,ps)
+    t_min = (ps.m_wet-ps.m_dry)*norm(ps.y0[4:6])/rho2
+    t_max = (ps.m_wet-ps.m_dry)/ps.alpha/rho1
+    N_min = Int(floor(t_min/Dt)+1)
+    N_max = Int(floor(t_max/Dt)+1)
+
+    cost_min = typemax(Float64)
+    eta_opt = []
+    A = []
+    B = []
+    N_opt = N_min
+    for N in N_min:N_max
+        print("Checking N=$(N): ")
+        eta, cost, A, B, feasible = solveSubproblem(N,Dt,ps)
+        if feasible && cost < cost_min 
+            println("More optimal. Cost of $(cost)")
+            cost_min = cost
+            eta_opt = eta
+            N_opt = N
+        else
+            println()
+        end
+    end 
+
+    solved = true
+    if eta_opt == []
+        solved = false
+    end
+    return eta_opt,N_opt,A,B,solved
+end
+
+function solveSubproblem(N,Dt,params)
     A,B = calcAB(Dt,params.alpha);
     m = size(B,2);
     n = size(B,1);
@@ -269,8 +266,14 @@ function solveProblem(N,Dt,params)
 
     eta_opt = evaluate(eta)
     # N_opt = evaluate(N)
+
+    feasible = true
+    if problem.status == MathOptInterface.INFEASIBLE
+        feasible = false    
+    end 
     
-    return eta_opt, A, B
+    cost = transpose(omega)*eta_opt
+    return eta_opt, cost, A, B, feasible
 end
 
 function eom(t,x,u,A,B,ps::ProblemParameters)
@@ -281,7 +284,10 @@ end
 function calcTrajectory(Dt,N,A,B,eta,ps::ProblemParameters)
     x = []
     u = []
-    for k = 1:N
+    m = []
+    throttle = []
+    theta_hist = []
+    for k = 0:N
         t = k*Dt
         mu1_k = makeMu(1,k,Dt,ps)
         mu2_k = makeMu(2,k,Dt,ps)
@@ -294,18 +300,43 @@ function calcTrajectory(Dt,N,A,B,eta,ps::ProblemParameters)
 
         state = XI_k+PSI_k*eta
         control = UPSILON_k*eta
-            
+        mass = exp(state[7])
+        theta = acos(dot(control[1:3]/norm(control[1:3]),[1;0;0]))
 
         push!(x,state[1:6])
         push!(u,control[1:3])
+        push!(m,mass)
+        push!(throttle,control[4]*mass/ps.T_bar/cos(ps.phi)/6)
+        push!(theta_hist,theta)
     end
-    return reduce(hcat,x),u
+    return reduce(hcat,x),reduce(hcat,u),reduce(hcat,m),reduce(hcat,throttle),reduce(hcat,theta_hist)
+end
+
+function makePlots(t,eta_opt,x,u,mass_hist,throttle_hist,theta_hist,params::ProblemParameters)
+    data = []
+    fs = 8
+
+    p1 = plot(t,transpose(x[1:3,:])/1000,tickfontsize=fs,linewidth=2,labels=["x" "y" "z"])
+    ylabel!("Position [km]",labelfontsize=fs)
+    p2 = plot(t,transpose(x[4:6,:]),tickfontsize=fs,linewidth=2,legend=false)
+    ylabel!("Velocity [m/s]",labelfontsize=fs)
+    p3 = plot(t,transpose(u[1:3,:]),tickfontsize=fs,linewidth=2,legend=false)
+    ylabel!("Acceleration [m/s/s]",labelfontsize=fs)
+    p4 = plot(t,transpose(u[1:3,:].*mass_hist),tickfontsize=fs,linewidth=2,legend=false)
+    ylabel!("Control Force",labelfontsize=fs)
+    p5 = plot(t,transpose(throttle_hist),tickfontsize=fs,linewidth=2,legend=false)
+    ylabel!("Throttle %",labelfontsize=fs)
+    p6 = plot(t,transpose(theta_hist).*180/3.1415,tickfontsize=fs,linewidth=2,legend=false)
+    ylabel!(L"\theta ",labelfontsize=fs)
+
+    # Add each plot to the subplot grid
+    p = plot(p1,p2,p3,p4,p5,p6,layout=(3,2))
+  
+    # Display the plot
+    display(p)
 end
 
 
-
-Dt = .5;
-N = 144
 
 g = [-3.7114; 0; 0];
 m_dry = 1505; #kg
@@ -317,9 +348,9 @@ T_2 = 0.8*T_bar;
 n = 6;
 phi = 27.0*3.1415/180;
 r0 = [1.5,0,2]*1000 #km -> m
-dr0 = [-75,0,100] #m/s
-# r0 = [10,0,0]
-# dr0 = [-5,0,0]
+dr0 = [-75,0,0] #m/s
+# r0 = [2,0,0]
+# dr0 = [-50,0,0]
 y0 = vcat(r0,dr0,log(m_wet))
 alpha = 1/(I_sp*9.807*cos(phi));
 theta_tilde = 86.0*3.1415/180;
@@ -331,21 +362,14 @@ a = [[0]]
 params = ProblemParameters(g,alpha,m_dry,m_wet,I_sp,T_bar,T_1,T_2,n,phi,y0,S,v,c,a)
 print(params)
 
-
-eta_opt, A, B = solveProblem(N,Dt,params)
+Dt = 5;
+eta_opt, N, A, B, solved = solveProblem(Dt,params)
 # [t,x] = simulateProblem(A,B,)
 # print(reshape(eta_opt,4,:))
 
 eta = transpose(reshape(eta_opt,4,:))
-x,u = calcTrajectory(Dt,N,A,B,eta_opt,params::ProblemParameters)
+x,u,mass_hist,throttle_hist,theta_hist = calcTrajectory(Dt,N,A,B,eta_opt,params::ProblemParameters)
+println(size(x))
+t=0:Dt:(N)*Dt
+makePlots(t,eta_opt,x,u,mass_hist,throttle_hist,theta_hist,params)
 
-# print(x)
-
-p = plot(transpose(x[1:3,:]))
-display(p)
-
-p = plot(eta)
-display(p)
-
-p = plot3d(x[2,:],x[3,:],x[1,:])
-display(p)
