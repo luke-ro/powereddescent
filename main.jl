@@ -390,18 +390,20 @@ function makePlots(t,pos,vel,acc,force,throttle,theta,params::ProblemParameters)
     # println(t)
     # println(throttle)
     # p1 = plot([0; 1],[0; 1])
-    p1 = plot(t,transpose(pos)/1000,tickfontsize=fs,linewidth=2,legend=false)#,labels=["x" "y" "z"])
+    p1 = plot(t,transpose(pos)/1000,tickfontsize=fs,linewidth=2,labels["x" "y" "z"],legend=true)#,labels=["x" "y" "z"])
     ylabel!("Position [km]",labelfontsize=fs)
     p2 = plot(t,transpose(vel),tickfontsize=fs,linewidth=2,legend=false)
     ylabel!("Velocity [m/s]",labelfontsize=fs)
     p3 = plot(t,transpose(acc.+params.g),tickfontsize=fs,linewidth=2,legend=false)
     ylabel!("Acceleration [m/s/s]",labelfontsize=fs)
     p4 = plot(t,transpose(force)./1000,tickfontsize=fs,linewidth=2,legend=false)
-    ylabel!("Control Force",labelfontsize=fs)
+    ylabel!("Control Force [kN]",labelfontsize=fs)
     p5 = plot(t,transpose(throttle),tickfontsize=fs,linewidth=2,legend=false)
     ylabel!("Throttle %",labelfontsize=fs)
     p6 = plot(t,transpose(theta).*180/3.1415,tickfontsize=fs,linewidth=2,legend=false)
-    ylabel!(L"\theta ",labelfontsize=fs)
+    ylabel!(L"\theta [deg]",labelfontsize=fs)
+
+    xlabel!("Time [s]")
 
     # Add each plot to the subplot grid
     p = plot(p1,p2,p3,p4,p5,p6,layout=(3,2))
@@ -518,6 +520,13 @@ pos_hist,vel_hist,acc_hist,force_hist,throttle_hist,theta_hist = calcTrajectory(
 p = makePlots(0:Dt:(N)*Dt,pos_hist,vel_hist,acc_hist,force_hist,throttle_hist,theta_hist,prob_params_1)
 savefig(base_dur*"paper_replication.png")
 
+# paper result with Glide slope
+prob_params_2 = ProblemParameters(g,alpha,m_dry,m_wet,I_sp,T_bar,T_1,T_2,n,phi,y0,S,v,c,a)
+eta, cost, A, B, feasible = solveSubproblem(y0,N,Dt,deepcopy(prob_params_2))
+pos_hist,vel_hist,acc_hist,force_hist,throttle_hist,theta_hist = calcTrajectory(Dt,N,A,B,eta,prob_params_2)
+p = makePlots(0:Dt:(N)*Dt,pos_hist,vel_hist,acc_hist,force_hist,throttle_hist,theta_hist,prob_params_2)
+savefig(base_dur*"paper_replication_glide_slope.png")
+
 Dt = 5;
 # eta_opt, N, A, B, solved = optimizeProblem(Dt,params)
 # [t,x] = simulateProblem(A,B,)
@@ -528,7 +537,7 @@ pos_hist,vel_hist,acc_hist,force_hist,throttle_hist,theta_hist = calcTrajParams(
 makePlots(t_hist,pos_hist,vel_hist,acc_hist,force_hist,throttle_hist,theta_hist,prob_params)
 
 # optimizeProblem(y0,Dt,prob_params)
-tf_hist,xf_hist,cost_hist,disp_hist,feasible_hist = monteCarloThrustDisp(3,prob_params)
+tf_hist,xf_hist,cost_hist,disp_hist,feasible_hist = monteCarloThrustDisp(50,prob_params)
 println(feasible_hist)
 p = makeMonteCarloPlots(disp_hist,tf_hist,xf_hist,cost_hist,feasible_hist)
 # eta = transpose(reshape(eta_opt,4,:))
