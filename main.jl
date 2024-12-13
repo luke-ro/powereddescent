@@ -172,6 +172,10 @@ function simulateTrajectory(simulation_Dt,guidance_update_Dt,ps::ProblemParamete
             i=1
         end
 
+        if size(eta,1)<i*4
+            completed = false
+            break
+        end
         
         u = eta[(i-1)*4+1: i*4]
 
@@ -204,7 +208,7 @@ function runGuidance(x,Dt,ps::ProblemParameters)
 end
 
 function addConstraints!(constraints,x0,A,B,N,Dt,eta,omega,params::ProblemParameters;m=7,n=4)
-    n_s = size(a,1) #number of constraints for ||S*x-v||+c^T*x + a <= 0
+    n_s = size(params.a,1) #number of constraints for ||S*x-v||+c^T*x + a <= 0
 
     #constraint in eq50
     for k in 0:N
@@ -390,9 +394,9 @@ function makePlots(t,pos,vel,acc,force,throttle,theta,params::ProblemParameters)
     ylabel!("Position [km]",labelfontsize=fs)
     p2 = plot(t,transpose(vel),tickfontsize=fs,linewidth=2,legend=false)
     ylabel!("Velocity [m/s]",labelfontsize=fs)
-    p3 = plot(t,transpose(acc),tickfontsize=fs,linewidth=2,legend=false)
+    p3 = plot(t,transpose(acc.+params.g),tickfontsize=fs,linewidth=2,legend=false)
     ylabel!("Acceleration [m/s/s]",labelfontsize=fs)
-    p4 = plot(t,transpose(force),tickfontsize=fs,linewidth=2,legend=false)
+    p4 = plot(t,transpose(force)./1000,tickfontsize=fs,linewidth=2,legend=false)
     ylabel!("Control Force",labelfontsize=fs)
     p5 = plot(t,transpose(throttle),tickfontsize=fs,linewidth=2,legend=false)
     ylabel!("Throttle %",labelfontsize=fs)
@@ -404,6 +408,7 @@ function makePlots(t,pos,vel,acc,force,throttle,theta,params::ProblemParameters)
   
     # Display the plot
     display(p)
+    return p
 end
 
 function calcTrajParams(t_hist,x_hist,u_hist,ps::ProblemParameters)
@@ -464,12 +469,13 @@ end
 
 function makeMonteCarloPlots(dispersion,tf,xf,cost,feasible; fs=8)
     dispersion = transpose(dispersion)
-    p1 = scatter(dispersion,transpose(tf),marker_z=feasible,tickfontsize=fs,linewidth=2,legend=false)
+    p1 = scatter(1 .- dispersion,transpose(tf),marker_z=transpose(feasible),tickfontsize=fs,linewidth=2,legend=false)
     ylabel!("Final Time [s]",labelfontsize=fs)
-    p2 = scatter(dispersion,norm.(eachcol(xf[1:3,:])),tickfontsize=fs,linewidth=2,legend=false)
+    p2 = scatter(1 .- dispersion,norm.(eachcol(xf[1:3,:])),marker_z=transpose(feasible),tickfontsize=fs,linewidth=2,legend=false)
     ylabel!("Final position error",labelfontsize=fs)
-    p3 = scatter(dispersion,transpose(cost),tickfontsize=fs,linewidth=2,legend=false)
+    p3 = scatter(1 .- dispersion,transpose(cost),marker_z=transpose(feasible),tickfontsize=fs,linewidth=2,legend=false)
     ylabel!("Cost",labelfontsize=fs)
+    xlabel!("Fraction of Thrust off Nominal")
 
     p = plot(p1,p2,p3,layout=(3,1))
     display(p)
@@ -487,7 +493,7 @@ T_2 = 0.8*T_bar;
 n = 6;
 phi = 27.0*3.1415/180;
 r0 = [1.5,0,2]*1000 #km -> m
-dr0 = [-75,0,0] #m/s
+dr0 = [-75,0,100] #m/s
 # r0 = [2,0,0]
 # dr0 = [-50,0,0]
 y0 = vcat(r0,dr0,log(m_wet))
@@ -501,14 +507,16 @@ a = [[0]]
 prob_params = ProblemParameters(g,alpha,m_dry,m_wet,I_sp,T_bar,T_1,T_2,n,phi,y0,S,v,c,a)
 # print(params)
 
+base_dur = "C:\\Users\\luker\\OneDrive - UCB-O365\\Classes\\2024_fall\\ASEN6015\\project\\figures\\"
 
-## replicate papre result
+## replicate paper result
 Dt = 0.5
 N = 144
-eta, cost, A, B, feasible = solveSubproblem(y0,N,Dt,deepcopy(prob_params))
-pos_hist,vel_hist,acc_hist,force_hist,throttle_hist,theta_hist = calcTrajectory(Dt,N,A,B,eta,prob_params)
-makePlots(0:Dt:(N)*Dt,pos_hist,vel_hist,acc_hist,force_hist,throttle_hist,theta_hist,prob_params)
-
+prob_params_1 = ProblemParameters(g,alpha,m_dry,m_wet,I_sp,T_bar,T_1,T_2,n,phi,y0,[],[],[],[])
+eta, cost, A, B, feasible = solveSubproblem(y0,N,Dt,deepcopy(prob_params_1))
+pos_hist,vel_hist,acc_hist,force_hist,throttle_hist,theta_hist = calcTrajectory(Dt,N,A,B,eta,prob_params_1)
+p = makePlots(0:Dt:(N)*Dt,pos_hist,vel_hist,acc_hist,force_hist,throttle_hist,theta_hist,prob_params_1)
+savefig(base_dur*"paper_replication.png")
 
 Dt = 5;
 # eta_opt, N, A, B, solved = optimizeProblem(Dt,params)
